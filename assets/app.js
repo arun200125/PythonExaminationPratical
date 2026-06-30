@@ -743,6 +743,9 @@
     }
 
     function firebaseErrorMessage(error) {
+      if (error?.code === "auth/unauthorized-domain") {
+        return "Firebase Auth is blocking this website domain. Add arun200125.github.io in Firebase Authentication > Settings > Authorized domains. (auth/unauthorized-domain)";
+      }
       const code = error?.code ? ` (${error.code})` : "";
       const message = error?.message || "Firebase request failed.";
       return `${message}${code}`;
