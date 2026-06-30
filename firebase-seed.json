@@ -1,0 +1,19 @@
+{
+  "exams": {
+    "practicalExamination2026": {
+      "admins": {
+        "aYdSqv40jJUqa2wJfPopc8tKNBi2": {
+          "uid": "aYdSqv40jJUqa2wJfPopc8tKNBi2",
+          "name": "System Administrator",
+          "email": "YOUR_ADMIN_EMAIL_HERE",
+          "role": "admin"
+        }
+      },
+      "banks": {},
+      "activeTests": {},
+      "subjects": {},
+      "attempts": {},
+      "vivaAttempts": {}
+    }
+  }
+}

@@ -6,15 +6,20 @@
     const SEMESTERS = ["1", "2", "3", "4", "5", "6"];
     const EXAM_YEAR = "2026";
     const EXAM_TITLE = `Practical Examination ${EXAM_YEAR}`;
-    const STORAGE_KEY = "collegePracticalExamSystem.v1";
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyB9Gp5_rrLoIl6gubai-BLcIJbPWQbK4qk",
+      authDomain: "gen-lang-client-0157565271.firebaseapp.com",
+      databaseURL: "https://gen-lang-client-0157565271-default-rtdb.firebaseio.com",
+      projectId: "gen-lang-client-0157565271",
+      storageBucket: "gen-lang-client-0157565271.firebasestorage.app",
+      messagingSenderId: "745621512272",
+      appId: "1:745621512272:web:87517059cac3b6e15cb155"
+    };
+    const FIREBASE_DATA_ROOT = "exams/practicalExamination2026";
     const SECTION_IDS = ["1", "2", "3"];
     const PAPER_ACCESS_CODE_COUNT = 5;
     const VIVA_ACCESS_CODE_COUNT = 10;
     const VIVA_ACCESS_CODE_LENGTH = 4;
-    const PASSWORD_HASH_ALGORITHM = "PBKDF2-HMAC-SHA-256";
-    const PASSWORD_HASH_ITERATIONS = 600000;
-    const PASSWORD_HASH_BITS = 256;
-    const ADMIN_SESSION_TTL_MS = 30 * 60 * 1000;
     const PUBLIC_TABS = new Set(["adminView", "studentView", "vivaView"]);
     const VALID_TABS = new Set([
       "dashboardView",
@@ -41,6 +46,10 @@
     let adminQuestions = { "1": [], "2": [], "3": [] };
     let editingSubjectId = "";
     let accessCodesVisible = false;
+    let firebaseServices = null;
+    let firebaseStatusMessage = "";
+    let firebasePublicListeners = [];
+    let firebaseAdminListener = null;
 
     const el = {
       adminLoginPanel: document.getElementById("adminLoginPanel"),
@@ -148,9 +157,6 @@
     boot();
 
     function boot() {
-      ensureDefaultAdmin();
-      ensureAccessCodeSchema();
-      currentAdmin = getSessionAdmin();
       fillCourseOptions(el.adminCourse);
       fillCourseOptions(el.studentCourse);
       fillCourseOptions(el.subjectCourse);
@@ -168,8 +174,8 @@
       renderAdminAuth();
       clearSubjectForm(false);
       renderAllSummaries();
-      switchTab(currentAdmin ? "dashboardView" : "studentView");
-      window.setInterval(enforceAdminSession, 60000);
+      switchTab("studentView");
+      initializeFirebase();
     }
 
     function bindEvents() {
@@ -333,39 +339,195 @@
     }
 
     function loadState() {
+      return emptyState();
+    }
+
+    function emptyState() {
+      return {
+        admins: {},
+        banks: {},
+        subjects: {},
+        attempts: {},
+        vivaAttempts: {},
+        activeTests: {}
+      };
+    }
+
+    function normalizeFirebaseMap(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function normalizeFirebaseState(value) {
+      const data = normalizeFirebaseMap(value);
+      return {
+        admins: normalizeFirebaseMap(data.admins),
+        banks: normalizeFirebaseMap(data.banks),
+        subjects: normalizeFirebaseMap(data.subjects),
+        attempts: normalizeFirebaseMap(data.attempts),
+        vivaAttempts: normalizeFirebaseMap(data.vivaAttempts),
+        activeTests: normalizeFirebaseMap(data.activeTests)
+      };
+    }
+
+    function sanitizeForFirebase(value) {
+      if (Array.isArray(value)) {
+        return value.map(sanitizeForFirebase);
+      }
+      if (value && typeof value === "object") {
+        return Object.entries(value).reduce((output, [key, item]) => {
+          if (typeof item !== "undefined") {
+            output[key] = sanitizeForFirebase(item);
+          }
+          return output;
+        }, {});
+      }
+      return typeof value === "undefined" ? null : value;
+    }
+
+    function isFirebaseConfigured() {
+      return Boolean(
+        FIREBASE_CONFIG.apiKey
+        && !FIREBASE_CONFIG.apiKey.startsWith("REPLACE_WITH")
+        && FIREBASE_CONFIG.authDomain
+        && !FIREBASE_CONFIG.authDomain.startsWith("REPLACE_WITH")
+        && FIREBASE_CONFIG.databaseURL
+        && !FIREBASE_CONFIG.databaseURL.includes("REPLACE_WITH")
+        && FIREBASE_CONFIG.projectId
+        && !FIREBASE_CONFIG.projectId.startsWith("REPLACE_WITH")
+        && FIREBASE_CONFIG.appId
+        && !FIREBASE_CONFIG.appId.startsWith("REPLACE_WITH")
+      );
+    }
+
+    function initializeFirebase() {
+      if (!isFirebaseConfigured()) {
+        firebaseStatusMessage = "Firebase is not configured. Paste your web app config into FIREBASE_CONFIG in assets/app.js.";
+        setStatus(el.adminLoginStatus, firebaseStatusMessage, "error");
+        return;
+      }
+      if (!globalThis.firebase?.initializeApp) {
+        firebaseStatusMessage = "Firebase SDK did not load. Check the script tags and Content Security Policy.";
+        setStatus(el.adminLoginStatus, firebaseStatusMessage, "error");
+        return;
+      }
       try {
-        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        return {
-          admins: parsed.admins || [],
-          banks: parsed.banks || {},
-          subjects: parsed.subjects && typeof parsed.subjects === "object" && !Array.isArray(parsed.subjects)
-            ? parsed.subjects
-            : {},
-          attempts: parsed.attempts || {},
-          vivaAttempts: parsed.vivaAttempts || {},
-          activeTests: parsed.activeTests && typeof parsed.activeTests === "object" && !Array.isArray(parsed.activeTests)
-            ? parsed.activeTests
-            : {}
+        const app = globalThis.firebase.apps?.length
+          ? globalThis.firebase.app()
+          : globalThis.firebase.initializeApp(FIREBASE_CONFIG);
+        firebaseServices = {
+          app,
+          auth: globalThis.firebase.auth(),
+          dataRef: globalThis.firebase.database().ref(FIREBASE_DATA_ROOT)
         };
+        startPublicFirebaseSync();
+        firebaseServices.auth.onAuthStateChanged(handleFirebaseAuthState);
       } catch (error) {
-        return { admins: [], banks: {}, subjects: {}, attempts: {}, vivaAttempts: {}, activeTests: {} };
+        firebaseStatusMessage = firebaseErrorMessage(error);
+        setStatus(el.adminLoginStatus, firebaseStatusMessage, "error");
       }
     }
 
-    function saveState() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    function startPublicFirebaseSync() {
+      attachFirebaseListener("banks", (value) => {
+        state.banks = normalizeFirebaseMap(value);
+        renderFromState();
+      }, firebasePublicListeners);
+      attachFirebaseListener("activeTests", (value) => {
+        state.activeTests = normalizeFirebaseMap(value);
+        renderFromState();
+      }, firebasePublicListeners);
+    }
+
+    function startAdminFirebaseSync() {
+      detachFirebaseListener(firebaseAdminListener);
+      firebaseAdminListener = attachFirebaseListener("", (value) => {
+        state = normalizeFirebaseState(value);
+        refreshCurrentAdminFromState();
+        ensureAccessCodeSchema();
+        renderFromState();
+      });
+    }
+
+    function attachFirebaseListener(path, callback, collection) {
+      if (!firebaseServices?.dataRef) {
+        return null;
+      }
+      const ref = path ? firebaseServices.dataRef.child(path) : firebaseServices.dataRef;
+      const listener = (snapshot) => callback(snapshot.val());
+      const errorHandler = (error) => {
+        firebaseStatusMessage = firebaseErrorMessage(error);
+        setStatus(el.adminLoginStatus, firebaseStatusMessage, "error");
+      };
+      ref.on("value", listener, errorHandler);
+      const entry = { ref, listener };
+      if (Array.isArray(collection)) {
+        collection.push(entry);
+      }
+      return entry;
+    }
+
+    function detachFirebaseListener(entry) {
+      if (entry?.ref && entry.listener) {
+        entry.ref.off("value", entry.listener);
+      }
+    }
+
+    function detachAdminFirebaseSync() {
+      detachFirebaseListener(firebaseAdminListener);
+      firebaseAdminListener = null;
+    }
+
+    function renderFromState() {
+      updateAdminPracticalList();
+      updateStudentPracticals();
+      if (currentAdmin) {
+        renderAdminBank();
+      }
+      renderAdminAuth();
       renderAllSummaries();
     }
 
-    function ensureDefaultAdmin() {
-      if (!Array.isArray(state.admins)) {
-        state.admins = [];
+    function saveState(statusTarget = el.adminStatus) {
+      renderAllSummaries();
+      if (!firebaseServices?.dataRef) {
+        setStatus(statusTarget, firebaseStatusMessage || "Firebase is not ready.", "error");
+        return Promise.resolve(false);
       }
-      const beforeCount = state.admins.length;
-      state.admins = state.admins.filter((admin) => !isLegacyDefaultAdmin(admin));
-      if (state.admins.length !== beforeCount) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (!requireAdmin()) {
+        return Promise.resolve(false);
       }
+      return firebaseServices.dataRef
+        .set(sanitizeForFirebase(normalizeFirebaseState(state)))
+        .then(() => true)
+        .catch((error) => {
+          setStatus(statusTarget, firebaseErrorMessage(error), "error");
+          return false;
+        });
+    }
+
+    function writeFirebaseChild(path, value, statusTarget) {
+      if (!firebaseServices?.dataRef) {
+        setStatus(statusTarget, firebaseStatusMessage || "Firebase is not ready.", "error");
+        return Promise.resolve(false);
+      }
+      return firebaseServices.dataRef
+        .child(path)
+        .set(sanitizeForFirebase(value))
+        .then(() => true)
+        .catch((error) => {
+          setStatus(statusTarget, firebaseErrorMessage(error), "error");
+          return false;
+        });
+    }
+
+    function saveAttempt(attemptKey) {
+      renderAllSummaries();
+      return writeFirebaseChild(`attempts/${attemptKey}`, state.attempts[attemptKey], el.studentStatus);
+    }
+
+    function saveVivaAttempt(vivaKey) {
+      renderAllSummaries();
+      return writeFirebaseChild(`vivaAttempts/${vivaKey}`, state.vivaAttempts[vivaKey], el.vivaStatus);
     }
 
     function ensureAccessCodeSchema() {
@@ -384,97 +546,83 @@
           changed = true;
         }
       });
-      if (changed) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (changed && currentAdmin) {
+        saveState();
       }
     }
 
-    function encodePassword(value) {
-      return btoa(unescape(encodeURIComponent(String(value || ""))));
+    function buildAdminProfile(user, record = {}) {
+      return {
+        uid: user.uid,
+        name: record.name || user.displayName || user.email || "Firebase Admin",
+        email: record.email || user.email || "",
+        username: record.email || user.email || user.uid,
+        role: record.role || "admin"
+      };
     }
 
-    function isLegacyDefaultAdmin(admin) {
-      return admin?.username === "admin" && admin?.password === encodePassword("admin123");
+    function refreshCurrentAdminFromState() {
+      const user = firebaseServices?.auth?.currentUser;
+      if (!user || !currentAdmin) {
+        return;
+      }
+      const record = state.admins?.[user.uid];
+      if (!record) {
+        currentAdmin = null;
+        detachAdminFirebaseSync();
+        firebaseServices.auth.signOut();
+        setStatus(el.adminLoginStatus, "This Firebase user no longer has admin access.", "error");
+        return;
+      }
+      currentAdmin = buildAdminProfile(user, record);
     }
 
-    function isBootstrapMode() {
-      return !Array.isArray(state.admins) || state.admins.length === 0;
-    }
-
-    function findAdmin(username) {
-      const normalized = String(username || "").trim().toLowerCase();
-      return (state.admins || []).find((admin) => admin.username.toLowerCase() === normalized) || null;
-    }
-
-    function getSessionAdmin() {
-      const sessionKey = `${STORAGE_KEY}.adminSession`;
+    async function handleFirebaseAuthState(user) {
+      detachAdminFirebaseSync();
+      if (!user) {
+        currentAdmin = null;
+        renderAdminAuth();
+        renderAllSummaries();
+        return;
+      }
       try {
-        const session = JSON.parse(sessionStorage.getItem(sessionKey) || "{}");
-        if (session?.expiresAt && Date.now() > session.expiresAt) {
-          clearAdminSession();
-          return null;
+        const adminSnapshot = await firebaseServices.dataRef.child(`admins/${user.uid}`).once("value");
+        const adminRecord = adminSnapshot.val();
+        if (!adminRecord || adminRecord.disabled) {
+          currentAdmin = null;
+          renderAdminAuth();
+          renderAllSummaries();
+          await firebaseServices.auth.signOut();
+          setStatus(el.adminLoginStatus, "Firebase sign-in succeeded, but this user is not listed as an exam admin.", "error");
+          return;
         }
-        if (session?.username) {
-          return findAdmin(session.username);
-        }
+        currentAdmin = buildAdminProfile(user, adminRecord);
+        startAdminFirebaseSync();
+        renderAdminAuth();
+        renderAllSummaries();
+        switchTab("dashboardView");
+        setStatus(el.adminLoginStatus, "Firebase admin login successful. Data is syncing.", "ok");
       } catch (error) {
-        clearAdminSession();
+        currentAdmin = null;
+        renderAdminAuth();
+        renderAllSummaries();
+        setStatus(el.adminLoginStatus, firebaseErrorMessage(error), "error");
       }
-      const legacyUsername = sessionStorage.getItem(`${STORAGE_KEY}.admin`);
-      const legacyAdmin = legacyUsername ? findAdmin(legacyUsername) : null;
-      if (legacyAdmin) {
-        setAdminSession(legacyAdmin);
-      }
-      sessionStorage.removeItem(`${STORAGE_KEY}.admin`);
-      return legacyAdmin;
-    }
-
-    function setAdminSession(admin) {
-      sessionStorage.setItem(`${STORAGE_KEY}.adminSession`, JSON.stringify({
-        username: admin.username,
-        expiresAt: Date.now() + ADMIN_SESSION_TTL_MS
-      }));
-      sessionStorage.removeItem(`${STORAGE_KEY}.admin`);
-    }
-
-    function clearAdminSession() {
-      sessionStorage.removeItem(`${STORAGE_KEY}.admin`);
-      sessionStorage.removeItem(`${STORAGE_KEY}.adminSession`);
     }
 
     function requireAdmin() {
-      if (currentAdmin) {
-        if (!enforceAdminSession()) {
-          return false;
-        }
-        setAdminSession(currentAdmin);
+      const user = firebaseServices?.auth?.currentUser;
+      if (currentAdmin && user && currentAdmin.uid === user.uid) {
         return true;
       }
-      setStatus(el.adminLoginStatus, "Login is required for admin actions.", "error");
+      setStatus(el.adminLoginStatus, "Firebase admin login is required for this action.", "error");
       renderAdminAuth();
       switchTab("adminView");
-      return false;
-    }
-
-    function enforceAdminSession() {
-      if (!currentAdmin) {
-        return true;
-      }
-      const sessionAdmin = getSessionAdmin();
-      if (sessionAdmin?.username === currentAdmin.username) {
-        return true;
-      }
-      currentAdmin = null;
-      renderAdminAuth();
-      renderAllSummaries();
-      switchTab("adminView");
-      setStatus(el.adminLoginStatus, "Admin session expired. Login again.", "error");
       return false;
     }
 
     function renderAdminAuth() {
       const loggedIn = Boolean(currentAdmin);
-      const bootstrap = isBootstrapMode();
       document.querySelectorAll(".tab-button[data-tab]").forEach((button) => {
         const locked = !loggedIn && !PUBLIC_TABS.has(button.dataset.tab);
         button.disabled = locked;
@@ -483,103 +631,57 @@
       el.adminLoginPanel.classList.toggle("hidden", loggedIn);
       el.adminDashboard.classList.toggle("hidden", !loggedIn);
       if (loggedIn) {
-        el.currentAdminName.textContent = `${currentAdmin.name} (${currentAdmin.username})`;
+        el.currentAdminName.textContent = `${currentAdmin.name} (${currentAdmin.email || currentAdmin.uid})`;
         if (el.headerAdminName) {
-          el.headerAdminName.textContent = currentAdmin.name || currentAdmin.username;
+          el.headerAdminName.textContent = currentAdmin.name || currentAdmin.email || currentAdmin.uid;
         }
         if (el.adminSessionBadge.textContent === "Locked") {
-          el.adminSessionBadge.textContent = "Draft";
+          el.adminSessionBadge.textContent = "Firebase";
         }
       } else {
         if (el.headerAdminName) {
           el.headerAdminName.textContent = "Login required";
         }
         el.adminSessionBadge.textContent = "Locked";
-        el.adminLoginTitle.textContent = bootstrap ? "Create First Admin" : "Admin Login";
-        el.adminLoginHelp.textContent = bootstrap
-          ? "No administrator exists in this browser yet. Create the first admin with a strong password."
-          : "Use your administrator account to access the examination dashboard.";
-        el.adminLoginBtnText.textContent = bootstrap ? "Create Admin" : "Login";
+        el.adminLoginTitle.textContent = "Admin Login";
+        el.adminLoginHelp.textContent = "Use the Firebase administrator email and password configured for this exam portal.";
+        el.adminLoginBtnText.textContent = "Login";
       }
       renderAdminList();
     }
 
     async function loginAdmin() {
-      const username = el.adminLoginUsername.value.trim();
+      const email = el.adminLoginUsername.value.trim();
       const password = el.adminLoginPassword.value;
-      if (isBootstrapMode()) {
-        const passwordError = validatePassword(password, username);
-        if (username.length < 3) {
-          setStatus(el.adminLoginStatus, "Username must be at least 3 characters.", "error");
-          return;
-        }
-        if (passwordError) {
-          setStatus(el.adminLoginStatus, passwordError, "error");
-          return;
-        }
-        let admin;
-        try {
-          admin = {
-            name: "System Administrator",
-            username,
-            ...(await createPasswordRecord(password)),
-            createdAt: new Date().toISOString()
-          };
-        } catch (error) {
-          setStatus(el.adminLoginStatus, securityErrorMessage(error), "error");
-          return;
-        }
-        state.admins.push(admin);
-        currentAdmin = admin;
-        setAdminSession(admin);
-        el.adminLoginPassword.value = "";
-        saveState();
-        renderAdminBank();
-        renderAdminAuth();
-        switchTab("dashboardView");
-        setStatus(el.adminLoginStatus, "First administrator created and logged in.", "ok");
+      if (!firebaseServices?.auth) {
+        setStatus(el.adminLoginStatus, firebaseStatusMessage || "Firebase is not ready.", "error");
         return;
       }
-      const admin = findAdmin(username);
-      let passwordValid = false;
+      if (!email || !password) {
+        setStatus(el.adminLoginStatus, "Enter Firebase admin email and password.", "error");
+        return;
+      }
       try {
-        passwordValid = admin ? await verifyAdminPassword(admin, password) : false;
+        setStatus(el.adminLoginStatus, "Signing in with Firebase...", "ok");
+        await firebaseServices.auth.signInWithEmailAndPassword(email, password);
+        el.adminLoginPassword.value = "";
       } catch (error) {
-        setStatus(el.adminLoginStatus, securityErrorMessage(error), "error");
-        return;
+        setStatus(el.adminLoginStatus, firebaseErrorMessage(error), "error");
       }
-      if (!admin || !passwordValid) {
-        setStatus(el.adminLoginStatus, "Invalid admin username or password.", "error");
-        return;
-      }
-      currentAdmin = admin;
-      if (needsPasswordMigration(admin)) {
-        try {
-          await migrateAdminPassword(admin, password);
-          saveState();
-        } catch (error) {
-          setStatus(el.adminLoginStatus, securityErrorMessage(error), "error");
-          return;
-        }
-      }
-      setAdminSession(admin);
-      el.adminLoginPassword.value = "";
-      setStatus(el.adminLoginStatus, "Admin login successful.", "ok");
-      renderAdminBank();
-      renderAdminAuth();
-      renderAllSummaries();
-      switchTab("dashboardView");
     }
 
-    function logoutAdmin() {
+    async function logoutAdmin() {
+      if (firebaseServices?.auth) {
+        await firebaseServices.auth.signOut();
+      }
       currentAdmin = null;
-      clearAdminSession();
+      detachAdminFirebaseSync();
       el.adminLoginUsername.value = "";
       el.adminLoginPassword.value = "";
       renderAdminAuth();
       renderAllSummaries();
       switchTab("adminView");
-      setStatus(el.adminLoginStatus, "Admin logged out.", "ok");
+      setStatus(el.adminLoginStatus, "Firebase admin logged out.", "ok");
     }
 
     async function addNewAdmin() {
@@ -587,148 +689,37 @@
         return;
       }
       const name = el.newAdminName.value.trim();
-      const username = el.newAdminUsername.value.trim();
-      const password = el.newAdminPassword.value;
-      if (!name || !username || !password) {
-        setStatus(el.newAdminStatus, "Enter admin name, username, and password.", "error");
+      const uid = el.newAdminUsername.value.trim();
+      const email = el.newAdminPassword.value.trim();
+      if (!name || !uid || !email) {
+        setStatus(el.newAdminStatus, "Enter admin name, Firebase UID, and email.", "error");
         return;
       }
-      const passwordError = validatePassword(password, username);
-      if (passwordError) {
-        setStatus(el.newAdminStatus, passwordError, "error");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setStatus(el.newAdminStatus, "Enter a valid Firebase Auth email address.", "error");
         return;
       }
-      if (findAdmin(username)) {
-        setStatus(el.newAdminStatus, "This admin username already exists.", "error");
+      if (state.admins?.[uid]) {
+        setStatus(el.newAdminStatus, "This Firebase UID is already an admin.", "error");
         return;
       }
-      let passwordRecord;
-      try {
-        passwordRecord = await createPasswordRecord(password);
-      } catch (error) {
-        setStatus(el.newAdminStatus, securityErrorMessage(error), "error");
-        return;
-      }
-      state.admins.push({
+      state.admins[uid] = {
+        uid,
         name,
-        username,
-        ...passwordRecord,
+        email,
+        role: "admin",
         createdAt: new Date().toISOString(),
-        createdBy: currentAdmin.username
-      });
+        createdBy: currentAdmin.uid
+      };
       el.newAdminName.value = "";
       el.newAdminUsername.value = "";
       el.newAdminPassword.value = "";
-      saveState();
+      const saved = await saveState(el.newAdminStatus);
+      if (!saved) {
+        return;
+      }
       renderAdminList();
-      setStatus(el.newAdminStatus, "New admin account added.", "ok");
-    }
-
-    function validatePassword(password, username = "") {
-      const normalized = String(password || "").trim().toLowerCase();
-      if (String(password || "").length < 14) {
-        return "Password must be at least 14 characters.";
-      }
-      if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
-        return "Password must include uppercase, lowercase, number, and symbol characters.";
-      }
-      if (/(.)\1{4,}/.test(password)) {
-        return "Password must not contain long repeated character runs.";
-      }
-      if (username && normalized.includes(String(username).trim().toLowerCase())) {
-        return "Password must not contain the admin username.";
-      }
-      if (["admin123", "password1", "12345678", "qwerty123", "password123!", "admin@123456"].includes(normalized)) {
-        return "Use a stronger password. Common default passwords are not allowed.";
-      }
-      return "";
-    }
-
-    async function createPasswordRecord(password) {
-      if (!canUseStrongPasswordHashing()) {
-        throw new Error("Strong password hashing requires HTTPS or localhost before admin accounts can be created.");
-      }
-      const salt = randomSalt();
-      return {
-        salt,
-        passwordAlgorithm: PASSWORD_HASH_ALGORITHM,
-        passwordIterations: PASSWORD_HASH_ITERATIONS,
-        passwordHash: await digestPassword(password, salt, PASSWORD_HASH_ITERATIONS)
-      };
-    }
-
-    async function verifyAdminPassword(admin, password) {
-      if (admin.passwordHash && admin.salt) {
-        if (admin.passwordAlgorithm === PASSWORD_HASH_ALGORITHM) {
-          const iterations = Number.parseInt(admin.passwordIterations, 10) || PASSWORD_HASH_ITERATIONS;
-          return constantTimeEqual(admin.passwordHash, await digestPassword(password, admin.salt, iterations));
-        }
-        return constantTimeEqual(admin.passwordHash, await legacyDigestPassword(password, admin.salt));
-      }
-      if (typeof admin.password !== "string" || !admin.password) {
-        return false;
-      }
-      return constantTimeEqual(admin.password, encodePassword(password));
-    }
-
-    function needsPasswordMigration(admin) {
-      return !admin.passwordHash
-        || admin.passwordAlgorithm !== PASSWORD_HASH_ALGORITHM
-        || (Number.parseInt(admin.passwordIterations, 10) || 0) < PASSWORD_HASH_ITERATIONS;
-    }
-
-    async function migrateAdminPassword(admin, password) {
-      const record = await createPasswordRecord(password);
-      admin.salt = record.salt;
-      admin.passwordAlgorithm = record.passwordAlgorithm;
-      admin.passwordIterations = record.passwordIterations;
-      admin.passwordHash = record.passwordHash;
-      delete admin.password;
-    }
-
-    function randomSalt() {
-      const bytes = new Uint8Array(16);
-      fillRandom(bytes);
-      return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    }
-
-    async function digestPassword(password, salt, iterations = PASSWORD_HASH_ITERATIONS) {
-      if (!canUseStrongPasswordHashing()) {
-        throw new Error("Strong password hashing requires HTTPS or localhost.");
-      }
-      const encoder = new TextEncoder();
-      const keyMaterial = await globalThis.crypto.subtle.importKey(
-        "raw",
-        encoder.encode(String(password || "")),
-        "PBKDF2",
-        false,
-        ["deriveBits"]
-      );
-      const bits = await globalThis.crypto.subtle.deriveBits(
-        {
-          name: "PBKDF2",
-          salt: encoder.encode(String(salt || "")),
-          iterations,
-          hash: "SHA-256"
-        },
-        keyMaterial,
-        PASSWORD_HASH_BITS
-      );
-      return bytesToHex(new Uint8Array(bits));
-    }
-
-    async function legacyDigestPassword(password, salt) {
-      const value = `${salt}:${password}`;
-      if (globalThis.crypto?.subtle && globalThis.TextEncoder) {
-        const data = new TextEncoder().encode(value);
-        const hash = await globalThis.crypto.subtle.digest("SHA-256", data);
-        return bytesToHex(new Uint8Array(hash));
-      }
-      return encodePassword(value);
-    }
-
-    function canUseStrongPasswordHashing() {
-      return Boolean(globalThis.crypto?.subtle && globalThis.TextEncoder);
+      setStatus(el.newAdminStatus, "Admin access saved. Make sure this UID exists in Firebase Authentication.", "ok");
     }
 
     function fillRandom(target) {
@@ -751,34 +742,19 @@
       return values[0] % maxExclusive;
     }
 
-    function bytesToHex(bytes) {
-      return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    }
-
-    function constantTimeEqual(a, b) {
-      const left = String(a || "");
-      const right = String(b || "");
-      let diff = left.length ^ right.length;
-      const length = Math.max(left.length, right.length);
-      for (let i = 0; i < length; i += 1) {
-        const leftCode = i < left.length ? left.charCodeAt(i) : 0;
-        const rightCode = i < right.length ? right.charCodeAt(i) : 0;
-        diff |= leftCode ^ rightCode;
-      }
-      return diff === 0;
-    }
-
-    function securityErrorMessage(error) {
-      return error?.message || "Secure browser features are unavailable. Publish and open this site over HTTPS.";
+    function firebaseErrorMessage(error) {
+      const code = error?.code ? ` (${error.code})` : "";
+      const message = error?.message || "Firebase request failed.";
+      return `${message}${code}`;
     }
 
     function renderAdminList() {
       if (!el.adminList) {
         return;
       }
-      el.adminList.innerHTML = (state.admins || []).map((admin) => {
-        const current = currentAdmin?.username === admin.username ? "Current" : "Admin";
-        return `<div class="admin-chip"><strong>${escapeHtml(admin.name)}</strong><span>${escapeHtml(admin.username)} | ${current}</span></div>`;
+      el.adminList.innerHTML = Object.values(state.admins || {}).map((admin) => {
+        const current = currentAdmin?.uid === admin.uid ? "Current" : "Admin";
+        return `<div class="admin-chip"><strong>${escapeHtml(admin.name)}</strong><span>${escapeHtml(admin.email || admin.uid)} | ${current}</span></div>`;
       }).join("");
     }
 
@@ -918,7 +894,7 @@
       el.semesterTableBody.innerHTML = rows.join("") || emptyTableRow(6, "No semesters found.");
     }
 
-    function saveSubject() {
+    async function saveSubject() {
       if (!requireAdmin()) {
         return;
       }
@@ -968,7 +944,10 @@
         updatedBy: currentAdmin.username
       };
 
-      saveState();
+      const saved = await saveState(el.subjectFormStatus);
+      if (!saved) {
+        return;
+      }
       clearSubjectForm(false);
       setStatus(el.subjectFormStatus, "Subject saved successfully.", "ok");
     }
@@ -1057,11 +1036,11 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
-    function deleteSubject(subject) {
+    async function deleteSubject(subject) {
       if (!requireAdmin()) {
         return;
       }
-      const confirmed = window.confirm(`Delete ${subject.name}? This removes the subject from the local catalog.`);
+      const confirmed = window.confirm(`Delete ${subject.name}? This removes the subject from the synced catalog.`);
       if (!confirmed) {
         return;
       }
@@ -1069,7 +1048,10 @@
       if (editingSubjectId === subject.id) {
         clearSubjectForm(false);
       }
-      saveState();
+      const saved = await saveState(el.subjectFormStatus);
+      if (!saved) {
+        return;
+      }
       setStatus(el.subjectFormStatus, "Subject deleted.", "ok");
     }
 
@@ -1437,7 +1419,7 @@
       return ids;
     }
 
-    function saveAdminDraft() {
+    async function saveAdminDraft() {
       if (!requireAdmin()) {
         return;
       }
@@ -1448,14 +1430,17 @@
       }
       state.banks[bank.id] = bank;
       upsertSubjectFromBank(bank);
-      saveState();
+      const saved = await saveState(el.adminStatus);
+      if (!saved) {
+        return;
+      }
       updateAdminPracticalList();
       updateStudentPracticals();
       renderAdminBank();
       setStatus(el.adminStatus, "Question bank draft saved.", "ok");
     }
 
-    function finalizeSession() {
+    async function finalizeSession() {
       if (!requireAdmin()) {
         return;
       }
@@ -1469,7 +1454,10 @@
       ensureBankAccessCodes(bank);
       state.banks[bank.id] = bank;
       upsertSubjectFromBank(bank);
-      saveState();
+      const saved = await saveState(el.adminStatus);
+      if (!saved) {
+        return;
+      }
       updateAdminPracticalList();
       updateStudentPracticals();
       renderAdminBank();
@@ -1498,7 +1486,7 @@
       return Object.values(state.activeTests || {});
     }
 
-    function activateSelectedTest() {
+    async function activateSelectedTest() {
       if (!requireAdmin()) {
         return;
       }
@@ -1527,13 +1515,16 @@
         activatedAt: new Date().toISOString(),
         activatedBy: currentAdmin.username
       };
-      saveState();
+      const saved = await saveState(el.adminStatus);
+      if (!saved) {
+        return;
+      }
       updateStudentPracticals();
       renderAdminBank();
       setStatus(el.adminStatus, "Test activated. Students can now use these Access Codes.", "ok");
     }
 
-    function deleteActiveTest(bankId) {
+    async function deleteActiveTest(bankId) {
       if (!requireAdmin()) {
         return;
       }
@@ -1547,7 +1538,10 @@
         return;
       }
       delete state.activeTests[bankId];
-      saveState();
+      const saved = await saveState(el.adminStatus);
+      if (!saved) {
+        return;
+      }
       updateStudentPracticals();
       renderAdminBank();
       setStatus(el.adminStatus, "Active test deleted. The question bank remains saved.", "ok");
@@ -1724,7 +1718,7 @@
       deleteAccessCode(button.dataset.tokenType, button.dataset.token);
     }
 
-    function deleteAccessCode(tokenType, token) {
+    async function deleteAccessCode(tokenType, token) {
       if (!requireAdmin()) {
         return;
       }
@@ -1751,7 +1745,10 @@
       }
       bank.updatedAt = new Date().toISOString();
       state.banks[bank.id] = bank;
-      saveState();
+      const saved = await saveState(el.adminStatus);
+      if (!saved) {
+        return;
+      }
       renderAdminBank();
       setStatus(el.adminStatus, `${label} deleted. Deleted codes can no longer access the module.`, "ok");
     }
@@ -1920,7 +1917,7 @@
       return bank;
     }
 
-    function registerAndGeneratePaper() {
+    async function registerAndGeneratePaper() {
       const result = validateStudentDetails();
       if (result.error) {
         setStatus(el.studentStatus, result.error, "error");
@@ -1944,13 +1941,19 @@
           updatedAt: new Date().toISOString()
         };
         state.attempts[currentAttemptKey] = attempt;
-        saveState();
+        const saved = await saveAttempt(currentAttemptKey);
+        if (!saved) {
+          return;
+        }
         setStatus(el.studentStatus, "Registration complete. Randomized question paper generated.", "ok");
       } else {
         attempt.details = result.details;
         attempt.updatedAt = new Date().toISOString();
         state.attempts[currentAttemptKey] = attempt;
-        saveState();
+        const saved = await saveAttempt(currentAttemptKey);
+        if (!saved) {
+          return;
+        }
         setStatus(el.studentStatus, "Existing question paper loaded for this roll number and Access Code.", "ok");
       }
 
@@ -1989,7 +1992,7 @@
       });
     }
 
-    function changeQuestionPaper() {
+    async function changeQuestionPaper() {
       if (!currentAttemptKey || !state.attempts[currentAttemptKey]) {
         setStatus(el.studentStatus, "Generate a question paper before using the change option.", "error");
         return;
@@ -2022,7 +2025,10 @@
       attempt.changed = true;
       attempt.updatedAt = new Date().toISOString();
       state.attempts[currentAttemptKey] = attempt;
-      saveState();
+      const saved = await saveAttempt(currentAttemptKey);
+      if (!saved) {
+        return;
+      }
       renderPaper(attempt);
       setStatus(el.studentStatus, "Question paper changed. The previous paper is locked and will not be shown again.", "ok");
     }
@@ -2112,7 +2118,10 @@
       attempt.downloadedPaperStatus = paperVersionLabel(attempt);
       attempt.updatedAt = downloadedAt;
       state.attempts[currentAttemptKey] = attempt;
-      saveState();
+      const saved = await saveAttempt(currentAttemptKey);
+      if (!saved) {
+        return;
+      }
 
       setStatus(el.studentStatus, "Preparing formatted PDF...", "ok");
       const logo = await loadPdfLogo();
@@ -2595,7 +2604,7 @@
       return toAscii(value).length;
     }
 
-    function generateViva() {
+    async function generateViva() {
       const token = el.vivaToken.value.trim();
       if (!token) {
         setStatus(el.vivaStatus, "Enter a 4 digit Viva Access Code.", "error");
@@ -2637,7 +2646,10 @@
           generatedAt: new Date().toISOString()
         };
         state.vivaAttempts[vivaKey] = attempt;
-        saveState();
+        const saved = await saveVivaAttempt(vivaKey);
+        if (!saved) {
+          return;
+        }
       }
       renderViva(attempt);
       setStatus(el.vivaStatus, "Viva questions generated from the uploaded syllabus.", "ok");
@@ -2719,7 +2731,7 @@
       link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
       if (el.settingsStatus) {
-        setStatus(el.settingsStatus, "All local records exported.", "ok");
+        setStatus(el.settingsStatus, "All Firebase records exported.", "ok");
       }
     }
 

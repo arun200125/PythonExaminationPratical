@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'none'; frame-src 'none'; form-action 'none'; upgrade-insecure-requests">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' https://www.gstatic.com; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://www.gstatic.com https://www.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com https://firebaselogging-pa.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebasedatabase.app; media-src 'none'; frame-src 'none'; form-action 'none'; upgrade-insecure-requests">
   <meta name="referrer" content="no-referrer">
   <title>B.N.N College Bhiwandi Practical Examination 2026</title>
   <link rel="stylesheet" href="assets/app.css">
@@ -142,13 +142,13 @@
           <div class="section-head">
             <div>
               <h2>Dashboard</h2>
-              <p>Control courses, semesters, subjects, practical banks, generated question papers, viva, and local records from one operable panel.</p>
+              <p>Control courses, semesters, subjects, practical banks, generated question papers, viva, and synced records from one operable panel.</p>
             </div>
             <span class="badge">Practical Examination 2026</span>
           </div>
           <div class="overview-strip">
             <div>
-              <strong>Local Record Summary</strong>
+              <strong>Synced Record Summary</strong>
               <span id="dashboardSummaryText">0 question banks | 0 active tests | 0 generated papers | 0 viva attempts</span>
             </div>
             <button class="btn" type="button" data-action="export-records">
@@ -346,7 +346,7 @@
             </div>
             <div class="record-stat">
               <span class="record-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 3h8l4 4v14H7z"></path><path d="M15 3v5h5"></path></svg></span>
-              <div><span>Generated Papers</span><strong id="paperGeneratedCount">0</strong><small>Local generated records</small></div>
+              <div><span>Generated Papers</span><strong id="paperGeneratedCount">0</strong><small>Synced generated records</small></div>
             </div>
           </div>
           <div class="section-stack">
@@ -424,8 +424,8 @@
                 <p class="help" id="adminLoginHelp">Use your administrator account to access the examination dashboard.</p>
               </div>
               <div class="field">
-                <label for="adminLoginUsername">Username</label>
-                <input id="adminLoginUsername" autocomplete="username" placeholder="admin">
+                <label for="adminLoginUsername">Firebase Email</label>
+                <input id="adminLoginUsername" type="email" autocomplete="username" placeholder="admin@example.com">
               </div>
               <div class="field">
                 <label for="adminLoginPassword">Password</label>
@@ -731,7 +731,7 @@
           <div class="records-toolbar">
             <div>
               <h2>Records</h2>
-              <p>Local browser records for active tests, generated student papers, downloads, and viva attempts.</p>
+              <p>Firebase records for active tests, generated student papers, downloads, and viva attempts.</p>
             </div>
             <button class="btn" type="button" data-action="export-records">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>
@@ -740,7 +740,7 @@
           </div>
           <div class="overview-strip">
             <div>
-              <strong>Local Record Summary</strong>
+              <strong>Synced Record Summary</strong>
               <span id="recordsSummaryText">0 question banks | 0 active tests | 0 generated papers | 0 viva attempts</span>
             </div>
             <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#5f55f6" aria-hidden="true"><path d="M5 19V9"></path><path d="M12 19V5"></path><path d="M19 19v-8"></path></svg>
@@ -769,9 +769,9 @@
           <div class="section-head">
             <div>
               <h2>Settings</h2>
-              <p>Manage local browser data actions and move quickly to the active examination modules.</p>
+              <p>Manage Firebase data actions and move quickly to the active examination modules.</p>
             </div>
-            <span class="badge">Local browser storage</span>
+            <span class="badge">Firebase Realtime Database</span>
           </div>
           <div class="settings-grid">
             <div class="settings-card">
@@ -784,7 +784,7 @@
             </div>
             <div class="settings-card">
               <h3>Refresh Dashboard</h3>
-              <p>Recalculate dashboard totals and redraw all local record summaries from saved browser data.</p>
+              <p>Recalculate dashboard totals and redraw all record summaries from synced Firebase data.</p>
               <button class="btn" type="button" data-action="refresh-summaries">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path></svg>
                 Refresh Counts
@@ -792,18 +792,18 @@
             </div>
             <div class="settings-card">
               <h3>Add New Admin</h3>
-              <p>Create login access for another administrator on this browser.</p>
+              <p>Grant portal access to another Firebase Authentication user.</p>
               <div class="field">
                 <label for="newAdminName">Admin Name</label>
                 <input id="newAdminName" placeholder="Full name">
               </div>
               <div class="field">
-                <label for="newAdminUsername">Username</label>
-                <input id="newAdminUsername" autocomplete="off" placeholder="Unique username">
+                <label for="newAdminUsername">Firebase UID</label>
+                <input id="newAdminUsername" autocomplete="off" placeholder="Auth user UID">
               </div>
               <div class="field">
-                <label for="newAdminPassword">Password</label>
-                <input id="newAdminPassword" type="password" autocomplete="new-password" placeholder="Minimum 14 characters with mixed types">
+                <label for="newAdminPassword">Admin Email</label>
+                <input id="newAdminPassword" type="email" autocomplete="email" placeholder="admin@example.com">
               </div>
               <button class="btn primary" type="button" id="addAdminBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6"></path><path d="M22 11h-6"></path></svg>
@@ -825,6 +825,9 @@
       </div>
     </div>
   </div>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js" defer></script>
   <script src="assets/app.js" defer></script>
 </body>
 </html>
